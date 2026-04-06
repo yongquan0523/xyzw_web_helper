@@ -293,7 +293,13 @@ const loadTeamDataWithConnection = async (
       if (result) {
         // 更新到游戏数据缓存中
         tokenStore.$patch((state) => {
-          state.gameData = { ...(state.gameData ?? {}), presetTeam: result };
+          state.gameData = {
+            ...(state.gameData ?? {}),
+            presetTeam: {
+              ...(state.gameData?.presetTeam ?? {}),
+              ...result
+            }
+          };
         });
         // 降噪
         message.success("阵容数据已更新");

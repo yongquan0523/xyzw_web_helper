@@ -250,7 +250,13 @@ const getTeamInfoWithCache = async (force = false) => {
       "获取阵容信息",
     );
     tokenStore.$patch((state: any) => {
-      state.gameData = { ...(state.gameData ?? {}), presetTeam: result };
+      state.gameData = {
+        ...(state.gameData ?? {}),
+        presetTeam: {
+          ...(state.gameData?.presetTeam ?? {}),
+          ...result
+        }
+      };
     });
     return result?.presetTeamInfo ?? null;
   } catch (e) {

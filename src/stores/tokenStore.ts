@@ -89,8 +89,9 @@ export const useTokenStore = defineStore("tokens", () => {
   const wsConnections = ref<WebCtx>({}); // WebSocket连接状态
   const connectionLocks = ref<LockCtx>({}); // 连接操作锁，防止竞态条件
 
-  // 游戏数据存储
-  const gameData = ref({
+  // 游戏数据存储 - 使用 useLocalStorage 持久化，防止浏览器崩溃后数据丢失
+  // mergeDefaults: true 确保缺失的字段会使用默认值填充，避免 JSON 序列化导致的数据丢失
+  const gameData = useLocalStorage("gameData", {
     roleInfo: null,
     legionInfo: null,
     commonActivityInfo: null, // 消耗活动进度
@@ -106,7 +107,7 @@ export const useTokenStore = defineStore("tokens", () => {
       timestamp: null,
     },
     lastUpdated: null as string | null,
-  });
+  }, { mergeDefaults: true });
 
   // 获取当前选中token的角色信息
   const selectedTokenRoleInfo = computed(() => {

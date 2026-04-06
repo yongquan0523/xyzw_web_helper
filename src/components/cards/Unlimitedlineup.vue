@@ -1403,7 +1403,10 @@ const refreshTeamInfo = async () => {
       tokenStore.$patch((state) => {
         state.gameData = {
           ...(state.gameData ?? {}),
-          presetTeam: presetTeamResult,
+          presetTeam: {
+            ...(state.gameData?.presetTeam ?? {}),
+            ...presetTeamResult
+          }
         };
       });
     }
