@@ -1497,8 +1497,32 @@ const saveCurrentLineup = async () => {
       const artifactId = heroData?.artifactId || hero.artifactId || null;
       const teamHeroInfo = teamInfo[hero.position];
       const fishId = artifactId ? fishAssignments[artifactId] : null;
-      const pearlId = teamHeroInfo?.pearlId || null;
-      const pearlData = pearlMap[pearlId];
+      
+      // 从 pearlMap 中查找当前武将绑定的鱼珠（通过 artifactId 匹配）
+      let pearlId = teamHeroInfo?.pearlId || null;
+      let pearlData = pearlMap[pearlId];
+      
+      // 如果 teamInfo 中没有 pearlId，尝试通过 artifactId 从 pearlMap 中查找
+      if (!pearlData && artifactId) {
+        for (const [pid, pData] of Object.entries(pearlMap)) {
+          if (pData.artifactId === artifactId) {
+            pearlId = Number(pid);
+            pearlData = pData;
+            break;
+          }
+        }
+      }
+      
+      console.log(`[保存阵容] 武将 ${getHeroName(hero.heroId) || hero.heroId}:`, {
+        heroId: hero.heroId,
+        position: hero.position,
+        artifactId,
+        fishId,
+        pearlId,
+        skillId: pearlData?.skillId,
+        hasSlotMap: !!pearlData?.slotMap
+      });
+      
       const slotMap = pearlData?.slotMap || null;
       return {
         position: hero.position,
@@ -1525,6 +1549,7 @@ const saveCurrentLineup = async () => {
       applying: false,
       legionResearch: legionResearch,
       weaponId: weaponId,
+      version: 2, // 阵容数据版本号，v2 包含完整的鱼灵/鱼珠数据
     });
 
     saveLineupsToStorage();
@@ -1786,6 +1811,27 @@ const applyLineup = async (lineup) => {
 
   try {
     const targetHeroes = [...lineup.heroes];
+    console.log(`[恢复阵容] 目标阵容 "${lineup.name}" 数据:`, {
+      teamId: lineup.teamId,
+      heroes: targetHeroes.map(h => ({
+        heroId: h.heroId,
+        position: h.position,
+        fishId: h.fishId,
+        pearlId: h.pearlId,
+        skillId: h.skillId,
+        level: h.level
+      }))
+    });
+    
+    // 检测旧版本数据：版本号缺失或 < 2 表示可能缺少完整的鱼灵/鱼珠数据
+    const lineupVersion = lineup.version || 1;
+    if (lineupVersion < 2) {
+      const hasAnyFishData = targetHeroes.some(h => h.fishId || h.pearlId);
+      if (!hasAnyFishData && targetHeroes.length > 0) {
+        console.warn(`[恢复阵容] 警告: 此阵容是旧格式保存的(v${lineupVersion})，缺少鱼灵/鱼珠数据`);
+        message.warning(`此阵容是旧格式保存的，建议重新保存以获得完整数据`);
+      }
+    }
 
     let { heroes, teamInfo } = await fetchLatestData();
     let currentHeroes = getTeamHeroes(teamInfo);
@@ -1799,6 +1845,10 @@ const applyLineup = async (lineup) => {
 
     const currentHeroIds = new Set(currentHeroes.map((h) => h.heroId));
     const targetHeroIds = new Set(targetHeroes.map((h) => h.heroId));
+
+    // 打印当前阵容状态
+    console.log(`[恢复阵容] 目标武将(共${targetHeroes.length}个):`, targetHeroes.map(h => `${getHeroName(h.heroId)}(ID:${h.heroId},位置:${h.position})`).join(', '));
+    console.log(`[恢复阵容] 当前武将(共${currentHeroes.length}个):`, currentHeroes.map(h => `${getHeroName(h.heroId)}(ID:${h.heroId},位置:${h.position})`).join(', '));
 
     for (const targetHero of targetHeroes) {
       if (!targetHero.attachmentUid || targetHero.attachmentUid === -1)
@@ -1864,6 +1914,8 @@ const applyLineup = async (lineup) => {
 
     for (const hero of [...currentHeroes]) {
       if (!targetHeroIds.has(hero.heroId)) {
+        const heroName = getHeroName(hero.heroId) || `武将${hero.heroId}`;
+        console.log(`[恢复阵容] 下阵武将 ${heroName} (位置 ${hero.position})`);
         try {
           await tokenStore.sendMessageWithPromise(
             tokenId,
@@ -1872,21 +1924,31 @@ const applyLineup = async (lineup) => {
               slot: hero.position,
             },
           );
-        } catch (err) {}
+          console.log(`[恢复阵容] 下阵成功: ${heroName}`);
+        } catch (err) {
+          console.warn(`[恢复阵容] 下阵失败: ${heroName}`, err);
+          errors.push(`下阵武将 ${heroName} 失败`);
+        }
         await delay(COMMAND_DELAY);
       }
     }
 
     await delay(COMMAND_DELAY);
+    // 增加等待时间确保服务器数据同步
+    await delay(500);
     const data2 = await fetchLatestData();
     await delay(COMMAND_DELAY);
     currentHeroes = getTeamHeroes(data2.teamInfo);
+    
+    console.log(`[恢复阵容] 下阵后当前武将(共${currentHeroes.length}个):`, currentHeroes.map(h => `${getHeroName(h.heroId)}(ID:${h.heroId},位置:${h.position})`).join(', '));
 
     for (const targetHero of targetHeroes) {
+      const heroName = getHeroName(targetHero.heroId) || `武将${targetHero.heroId}`;
       const currentHero = currentHeroes.find(
         (h) => h.heroId === targetHero.heroId,
       );
       if (!currentHero) {
+        console.log(`[恢复阵容] 上阵武将 ${heroName} 到位置 ${targetHero.position}`);
         try {
           await tokenStore.sendMessageWithPromise(
             tokenId,
@@ -1896,31 +1958,33 @@ const applyLineup = async (lineup) => {
               slot: targetHero.position,
             },
           );
-        } catch (err) {}
+          console.log(`[恢复阵容] 上阵成功: ${heroName}`);
+        } catch (err) {
+          console.warn(`[恢复阵容] 上阵失败: ${heroName}`, err);
+          errors.push(`上阵武将 ${heroName} 失败: ${err.message || err}`);
+        }
         await delay(COMMAND_DELAY);
       } else if (currentHero.position !== targetHero.position) {
+        console.log(`[恢复阵容] 调整武将 ${heroName} 位置: ${currentHero.position} -> ${targetHero.position}`);
+        // 注意：不使用 hero_gobackbattle，因为位置可能已经被其他武将占用
+        // 直接使用 hero_gointobattle 到新位置即可
         try {
           await tokenStore.sendMessageWithPromise(
             tokenId,
-            "hero_gobackbattle",
+            "hero_gointobattle",
             {
-              slot: currentHero.position,
+              heroId: targetHero.heroId,
+              slot: targetHero.position,
             },
           );
-          await delay(COMMAND_DELAY);
-          try {
-            await tokenStore.sendMessageWithPromise(
-              tokenId,
-              "hero_gointobattle",
-              {
-                heroId: targetHero.heroId,
-                slot: targetHero.position,
-              },
-            );
-          } catch (err) {}
-          await delay(COMMAND_DELAY);
-        } catch (err) {}
+          console.log(`[恢复阵容] 调整位置成功: ${heroName}`);
+        } catch (err) {
+          console.warn(`[恢复阵容] 调整位置失败: ${heroName}`, err);
+          errors.push(`调整武将 ${heroName} 位置失败: ${err.message || err}`);
+        }
         await delay(COMMAND_DELAY);
+      } else {
+        console.log(`[恢复阵容] 武将 ${heroName} 已在正确位置 ${targetHero.position}，无需调整`);
       }
     }
 
@@ -1959,11 +2023,7 @@ const applyLineup = async (lineup) => {
       }
     }
 
-    if (errors.length > 0) {
-      message.warning(`阵容已应用，但有部分错误:\n${errors.join("\n")}`);
-    } else {
-      message.success(`阵容 "${lineup.name}" 已应用`);
-    }
+    // 先执行鱼灵配置，再显示最终结果
 
     const hasFishData = lineup.heroes.some((h) => h.pearlId || h.fishId);
     if (hasFishData) {
@@ -1973,9 +2033,11 @@ const applyLineup = async (lineup) => {
       const artifactBooks = fishData.artifactBooks || {};
 
       const artifactToHero = {};
+      const heroToArtifact = {}; // 新增：记录每个武将持有的鱼灵
       for (const [heroId, hero] of Object.entries(currentHeroes)) {
         if (hero.artifactId && hero.artifactId !== -1) {
           artifactToHero[hero.artifactId] = Number(heroId);
+          heroToArtifact[Number(heroId)] = hero.artifactId;
         }
       }
 
@@ -1987,8 +2049,22 @@ const applyLineup = async (lineup) => {
       }
 
       let fishApplied = 0;
+      const fishErrors = [];
+      console.log(`[恢复阵容] 当前鱼灵映射 fishToArtifact:`, fishToArtifact);
+      console.log(`[恢复阵容] 当前鱼珠映射 pearlMap keys:`, Object.keys(pearlMap));
+      
       for (const targetHero of targetHeroes) {
-        if (!targetHero.fishId && !targetHero.pearlId) continue;
+        const heroName = getHeroName(targetHero.heroId) || `武将${targetHero.heroId}`;
+        console.log(`[恢复阵容] 处理武将 ${heroName} (ID:${targetHero.heroId}):`, {
+          fishId: targetHero.fishId,
+          pearlId: targetHero.pearlId,
+          skillId: targetHero.skillId
+        });
+        
+        if (!targetHero.fishId && !targetHero.pearlId) {
+          console.log(`[恢复阵容] 武将 ${heroName} 没有鱼灵/鱼珠配置，跳过`);
+          continue;
+        }
 
         let artifactId = null;
         let pearlId = targetHero.pearlId || 0;
@@ -2004,15 +2080,32 @@ const applyLineup = async (lineup) => {
           }
         }
 
-        if (!artifactId) continue;
-
-        const currentHolderId = artifactToHero[artifactId];
-
-        if (currentHolderId === targetHero.heroId) {
+        if (!artifactId) {
+          if (targetHero.fishId || targetHero.pearlId) {
+            fishErrors.push(`${heroName} 的鱼灵/鱼珠配置无法应用（找不到对应的artifact，fishId=${targetHero.fishId}, pearlId=${targetHero.pearlId}）`);
+          }
           continue;
         }
 
+        const currentHolderId = artifactToHero[artifactId];
+
+        // 检查当前武将是否已持有正确的鱼灵和鱼珠
+        const currentHeroData = currentHeroes[targetHero.heroId];
+        const currentPearlId = currentHeroData?.pearlId || 0;
+        const needsUpdate = currentHolderId !== targetHero.heroId || currentPearlId !== pearlId;
+        
+        if (!needsUpdate) {
+          console.log(`[恢复阵容] 武将 ${heroName} 已持有正确的鱼灵(artifactId=${artifactId})和鱼珠(pearlId=${pearlId})，跳过`);
+          continue;
+        }
+        
+        if (currentHolderId === targetHero.heroId) {
+          console.log(`[恢复阵容] 武将 ${heroName} 已持有正确的鱼灵，但鱼珠需要更新: 当前pearlId=${currentPearlId}, 目标pearlId=${pearlId}`);
+        }
+
         if (currentHolderId) {
+          const holderName = getHeroName(currentHolderId) || `武将${currentHolderId}`;
+          console.log(`[恢复阵容] 鱼灵 ${artifactId} 当前被 ${holderName} 持有，先卸载`);
           try {
             await tokenStore.sendMessageWithPromise(
               tokenId,
@@ -2021,8 +2114,18 @@ const applyLineup = async (lineup) => {
                 heroId: currentHolderId,
               },
             );
+            // 更新映射，移除旧的持有关系
+            delete artifactToHero[artifactId];
+            delete heroToArtifact[currentHolderId];
           } catch (err) {}
           await delay(COMMAND_DELAY);
+        }
+
+        // 检查目标武将是否持有其他鱼灵，如果有则清除映射
+        const oldArtifactId = heroToArtifact[targetHero.heroId];
+        if (oldArtifactId && oldArtifactId !== artifactId) {
+          console.log(`[恢复阵容] ${heroName} 之前持有鱼灵 ${oldArtifactId}，清除映射`);
+          delete artifactToHero[oldArtifactId];
         }
 
         try {
@@ -2032,12 +2135,40 @@ const applyLineup = async (lineup) => {
             pearlId: pearlId,
           });
           fishApplied++;
-        } catch (err) {}
+          // 更新映射，确保后续处理使用最新数据
+          artifactToHero[artifactId] = targetHero.heroId;
+          heroToArtifact[targetHero.heroId] = artifactId;
+          console.log(`[恢复阵容] 鱼灵应用成功: 武将 ${heroName}, artifactId=${artifactId}, pearlId=${pearlId}`);
+        } catch (err) {
+          console.warn(`[恢复阵容] 鱼灵应用失败: 武将 ${heroName}`, err);
+        }
         await delay(COMMAND_DELAY);
       }
 
       if (fishApplied > 0) {
         message.success(`已应用 ${fishApplied} 个鱼灵配置`);
+      }
+      if (fishErrors.length > 0) {
+        message.warning(`部分鱼灵配置无法应用:\n${fishErrors.slice(0, 3).join('\n')}${fishErrors.length > 3 ? `\n...等${fishErrors.length}个` : ''}`);
+      }
+
+      // 验证鱼灵是否真的应用成功
+      await delay(500);
+      const verifyData = await fetchLatestData();
+      const verifyHeroes = verifyData.heroes;
+      console.log(`[恢复阵容] 验证鱼灵应用结果:`);
+      for (const targetHero of targetHeroes) {
+        if (!targetHero.fishId && !targetHero.pearlId) continue;
+        const heroData = verifyHeroes[targetHero.heroId];
+        const actualArtifactId = heroData?.artifactId;
+        const expectedArtifactId = fishToArtifact[targetHero.fishId] || pearlMap[targetHero.pearlId]?.artifactId;
+        const heroName = getHeroName(targetHero.heroId) || `武将${targetHero.heroId}`;
+        if (actualArtifactId !== expectedArtifactId) {
+          console.warn(`[恢复阵容] ⚠️ ${heroName} 鱼灵验证失败! 期望=${expectedArtifactId}, 实际=${actualArtifactId}`);
+          fishErrors.push(`${heroName} 鱼灵验证失败，请手动检查`);
+        } else {
+          console.log(`[恢复阵容] ✅ ${heroName} 鱼灵验证成功: artifactId=${actualArtifactId}`);
+        }
       }
 
       let skillApplied = 0;
@@ -2172,6 +2303,13 @@ const applyLineup = async (lineup) => {
 
     lastRefreshTime = 0;
     await refreshTeamInfo();
+    
+    // 显示最终应用结果
+    if (errors.length > 0) {
+      message.warning(`阵容 "${lineup.name}" 已应用，但有部分错误:\n${errors.join("\n")}`);
+    } else {
+      message.success(`阵容 "${lineup.name}" 已成功应用`);
+    }
   } catch (error) {
     message.error(`应用阵容失败: ${error.message}`);
   } finally {
